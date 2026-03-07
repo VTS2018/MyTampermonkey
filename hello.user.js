@@ -19,6 +19,15 @@
         propertyName: '番号' // 对应 Notion 中的属性名
     };
 
+    // 排除的文件后缀列表（黑名单）
+    const EXCLUDED_EXTENSIONS = [
+        '.srt', '.ass', '.ssa',                      // 字幕文件
+        '.jpg', '.jpeg', '.png', '.gif', '.bmp',     // 图片文件
+        '.rar', '.zip', '.7z', '.tar', '.gz',        // 压缩包
+        '.txt', '.nfo', '.md',                       // 文本文件
+        '.exe', '.dll', '.so'                        // 可执行文件
+    ];
+
     // ================= 逻辑区 =================
 
     // 1. 框架检查
@@ -67,6 +76,9 @@
         });
     }
 
+    // 1. 定义一个等待函数 (类似于 .NET 的 Task.Delay)
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
     // 4. 界面注入与处理
     async function startMatching() {
         // 定位到你分析出的 HTML 结构
@@ -74,12 +86,30 @@
         
         console.log(`开始处理 ${items.length} 个文件...`);
 
+        let processedCount = 0;
+        let skippedCount = 0;
+
         for (let li of items) {
             // 避免重复注入
             if (li.querySelector('.notion-status-icon')) continue;
 
             const rawName = li.getAttribute('title');
+            
+            // 文件后缀过滤：检查是否在排除列表中
+            if (rawName) {
+                const lastDotIndex = rawName.lastIndexOf('.');
+                if (lastDotIndex !== -1) {
+                    const fileExt = rawName.substring(lastDotIndex).toLowerCase();
+                    if (EXCLUDED_EXTENSIONS.includes(fileExt)) {
+                        console.log(`[跳过] ${rawName} (类型: ${fileExt})`);
+                        skippedCount++;
+                        continue; // 跳过此文件，不执行后续查询
+                    }
+                }
+            }
+            
             const cleanedName = cleanFileName(rawName);
+            processedCount++;
             
             // 在 li 内部创建一个状态占位符（小图标）
             const statusIcon = document.createElement('span');
@@ -87,6 +117,10 @@
             statusIcon.innerHTML = ' 🔍'; // 查询中的占位符
             statusIcon.style.cssText = "position:absolute; top:5px; left:5px; z-index:10; font-size:12px; cursor:pointer;";
             li.appendChild(statusIcon);
+
+            // --- 核心改进：在每次请求前设置间隔 ---
+            // 设置 350ms 的间隔，确保每秒请求数不超过 3 次，安全稳定
+            await sleep(350);
 
             // 执行异步查询
             const pageUrl = await queryNotion(cleanedName);
@@ -108,6 +142,8 @@
                 statusIcon.style.opacity = "0.3";
             }
         }
+        
+        console.log(`处理完成: 已查询 ${processedCount} 个文件，跳过 ${skippedCount} 个文件`);
     }
 
     // 5. 注入主控制按钮
