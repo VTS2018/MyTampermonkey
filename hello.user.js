@@ -343,6 +343,20 @@
             if (li.querySelector('.notion-pickcode-icon')) continue;
 
             const pickCode = li.getAttribute('pick_code');
+            const rawName = li.getAttribute('title');
+            
+            // 文件后缀过滤：检查是否在排除列表中
+            if (rawName) {
+                const lastDotIndex = rawName.lastIndexOf('.');
+                if (lastDotIndex !== -1) {
+                    const fileExt = rawName.substring(lastDotIndex).toLowerCase();
+                    if (EXCLUDED_EXTENSIONS.includes(fileExt)) {
+                        console.log(`[跳过] ${rawName} (类型: ${fileExt})`);
+                        skippedCount++;
+                        continue; // 跳过此文件，不执行后续查询
+                    }
+                }
+            }
             
             // 检查是否有 pick_code 属性
             if (!pickCode || pickCode.trim() === '') {
@@ -380,7 +394,6 @@
                 statusIcon.style.borderRadius = "3px";
             } else {
                 // 匹配失败：添加创建功能
-                const rawName = li.getAttribute('title');
                 const cleanedTitle = cleanFileNameEnhanced(rawName);
                 
                 statusIcon.innerHTML = ' ❌';
@@ -424,7 +437,7 @@
             }
         }
         
-        console.log(`[PickCode模式] 处理完成: 已查询 ${processedCount} 个文件, 跳过 ${noPickCodeCount} 个无pick_code的文件`);
+        console.log(`[PickCode模式] 处理完成: 已查询 ${processedCount} 个文件, 跳过 ${skippedCount} 个后缀文件, ${noPickCodeCount} 个无pick_code的文件`);
         console.log(`[PickCode模式] 未匹配: ${unmatchedItems.length} 个`);
         
         // 更新批量创建按钮状态
