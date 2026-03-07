@@ -9,6 +9,22 @@
 // @connect      api.notion.com
 // ==/UserScript==
 
+/**
+ * 经过分析 网页发现 需要提取的文件名的信息 是在下面的一个 HTML结构里面的：内容如下
+“<div class="list-thumb"><ul><li iv="1" c="0" vdi="4" rel="item" title="230OREV-117.mp4" hdf="0" file_type="1" cid="3163309351175716774" file_mode="9" user_ptime="2025-07-08 16:10" is_share="{is_share}" pick_expire="-" file_size="1475293173" is_top="0" file_id="3203996983137784092" file_status="1" area_id="1" p_id="3163309351175716774" ico="mp4" pick_code="ey76mlwnk0x77zf6r" is_collect="{is_collect}" score="0" has_desc="0" is_q="0" shared="0" fl_encode="%5B%5D" fuuid="1257688" uid="1257688" has_pass="0" sha1="A400CEE572825E787B2A4B1E79B4BE6D9ABB59FF">”
+====================
+这是一个 “<div class="list-thumb"><ul>” 父结构，然后 ul元素下 都是li元素，而文件名字就藏在li元素的title属性里面，请根据这个 HTML文档结构 开始修改代码
+ */
+
+/**
+ * 既然已经可以使用脚本 提取到 网盘中的文件名字了，那么 假设得到一个名字“DASS-128-C.mp4”,获得这个文件名以后，
+ * 去掉文件后缀".mp4",去掉“-C”字符，然后使用这个名字和notion数据库的Page匹配结果，
+ * 其查找条件是 找寻 “番号”为“DASS-128”的Page，其中番号在notion的数据类型是Title类型。
+ * 分析这个需求 如何实现。然后在界面上 该如何给用户一个操作界面，如果找到了 这个Page，则返回这个Page链接，
+ * 在每个文件名后面 显示一个连接，让用户可以一键直达notionPage
+ * 
+ */
+
 (function() {
     'use strict';
 
