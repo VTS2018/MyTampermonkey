@@ -263,14 +263,23 @@
         // 定位到你分析出的 HTML 结构
         const items = document.querySelectorAll('.list-thumb ul li[rel="item"]');
         
-        console.log(`开始处理 ${items.length} 个文件...`);
+        console.log(`开始处理 ${items.length} 个对象...`);
 
         let processedCount = 0;
         let skippedCount = 0;
+        let folderCount = 0;
 
         for (let li of items) {
             // 避免重复注入
             if (li.querySelector('.notion-status-icon')) continue;
+
+            // 检查是否是文件夹：文件夹没有 sha1 属性
+            const sha1 = li.getAttribute('sha1');
+            if (!sha1 || sha1.trim() === '') {
+                console.log(`[跳过] 文件夹对象`);
+                folderCount++;
+                continue;
+            }
 
             const rawName = li.getAttribute('title');
             
@@ -322,25 +331,34 @@
             }
         }
         
-        console.log(`处理完成: 已查询 ${processedCount} 个文件，跳过 ${skippedCount} 个文件`);
+        console.log(`处理完成: 已查询 ${processedCount} 个文件，跳过 ${folderCount} 个文件夹, ${skippedCount} 个后缀文件`);
     }
 
     // 4.1 基于 pick_code 的匹配处理（新增）
     async function startMatchingByPickCode() {
         const items = document.querySelectorAll('.list-thumb ul li[rel="item"]');
         
-        console.log(`[PickCode模式] 开始处理 ${items.length} 个文件...`);
+        console.log(`[PickCode模式] 开始处理 ${items.length} 个对象...`);
 
         // 清空之前的未匹配列表
         unmatchedItems = [];
 
         let processedCount = 0;
         let skippedCount = 0;
+        let folderCount = 0;
         let noPickCodeCount = 0;
 
         for (let li of items) {
             // 避免重复注入（使用不同的 class 名区分）
             if (li.querySelector('.notion-pickcode-icon')) continue;
+
+            // 检查是否是文件夹：文件夹没有 sha1 属性
+            const sha1 = li.getAttribute('sha1');
+            if (!sha1 || sha1.trim() === '') {
+                console.log(`[跳过] 文件夹对象`);
+                folderCount++;
+                continue;
+            }
 
             const pickCode = li.getAttribute('pick_code');
             const rawName = li.getAttribute('title');
@@ -437,7 +455,7 @@
             }
         }
         
-        console.log(`[PickCode模式] 处理完成: 已查询 ${processedCount} 个文件, 跳过 ${skippedCount} 个后缀文件, ${noPickCodeCount} 个无pick_code的文件`);
+        console.log(`[PickCode模式] 处理完成: 已查询 ${processedCount} 个文件, 跳过 ${folderCount} 个文件夹, ${skippedCount} 个后缀文件, ${noPickCodeCount} 个无pick_code的文件`);
         console.log(`[PickCode模式] 未匹配: ${unmatchedItems.length} 个`);
         
         // 更新批量创建按钮状态
