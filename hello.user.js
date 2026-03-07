@@ -30,7 +30,8 @@
 
     // ================= 配置区 =================
     const NOTION_CONFIG = {
-
+        token: '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',
+        databaseId: '546b58ef109d4b4393824c33993374a8',
         propertyName: '番号',          // 对应 Notion 中的属性名（用于 title 查询）
         playLinkProperty: 'PlayLink'   // 对应 Notion 中的 PlayLink 字段（用于 pick_code 查询）
     };
