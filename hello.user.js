@@ -53,6 +53,9 @@
 
     // ================= 逻辑区 =================
 
+    // 0. 全局变量：跟踪未匹配的项目
+    let unmatchedItems = [];
+
     // 1. 框架检查
     const isFileListFrame = window.location.href.includes("ct=file") || window.location.href.includes("ct=index");
     if (!isFileListFrame) return;
@@ -198,6 +201,60 @@
         return null;
     }
 
+    // 3.2 创建 Notion Page（新增）
+    async function createNotionPage(title, pickCode) {
+        console.log(`[Notion创建] 开始创建 Page: ${title}, PickCode: ${pickCode}`);
+        
+        const playLinkUrl = `https://115vod.com/?pickcode=${pickCode}`;
+        
+        return new Promise((resolve) => {
+            GM_xmlhttpRequest({
+                method: "POST",
+                url: "https://api.notion.com/v1/pages",
+                headers: {
+                    "Authorization": `Bearer ${NOTION_CONFIG.token}`,
+                    "Content-Type": "application/json",
+                    "Notion-Version": "2022-06-28"
+                },
+                data: JSON.stringify({
+                    parent: {
+                        database_id: NOTION_CONFIG.databaseId
+                    },
+                    properties: {
+                        // Title 类型字段
+                        [`${NOTION_CONFIG.propertyName}`]: {
+                            title: [
+                                {
+                                    text: {
+                                        content: title
+                                    }
+                                }
+                            ]
+                        },
+                        // URL 类型字段
+                        [NOTION_CONFIG.playLinkProperty]: {
+                            url: playLinkUrl
+                        }
+                    }
+                }),
+                onload: (res) => {
+                    if (res.status === 200) {
+                        const data = JSON.parse(res.responseText);
+                        console.log(`✅ [Notion创建] 创建成功: ${title}`);
+                        resolve(data.url);  // 返回新创建的 Page URL
+                    } else {
+                        console.error(`❌ [Notion创建] 创建失败: ${res.status}`, res.responseText);
+                        resolve(null);
+                    }
+                },
+                onerror: (err) => {
+                    console.error('[Notion创建] 请求失败:', err);
+                    resolve(null);
+                }
+            });
+        });
+    }
+
     // 1. 定义一个等待函数 (类似于 .NET 的 Task.Delay)
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -274,6 +331,9 @@
         
         console.log(`[PickCode模式] 开始处理 ${items.length} 个文件...`);
 
+        // 清空之前的未匹配列表
+        unmatchedItems = [];
+
         let processedCount = 0;
         let skippedCount = 0;
         let noPickCodeCount = 0;
@@ -319,14 +379,185 @@
                 statusIcon.style.padding = "2px 4px";
                 statusIcon.style.borderRadius = "3px";
             } else {
-                // 匹配失败
+                // 匹配失败：添加创建功能
+                const rawName = li.getAttribute('title');
+                const cleanedTitle = cleanFileNameEnhanced(rawName);
+                
                 statusIcon.innerHTML = ' ❌';
-                statusIcon.title = `PickCode 未匹配: ${pickCode}`;
-                statusIcon.style.opacity = "0.3";
+                statusIcon.title = 'PickCode 未匹配 | 点击创建 Notion Page';
+                statusIcon.style.opacity = '0.5';
+                statusIcon.style.cursor = 'pointer';
+                
+                // 保存数据到 dataset
+                statusIcon.dataset.pickCode = pickCode;
+                statusIcon.dataset.rawTitle = rawName;
+                statusIcon.dataset.cleanedTitle = cleanedTitle;
+                
+                // 添加到未匹配列表
+                unmatchedItems.push({
+                    li: li,
+                    icon: statusIcon,
+                    pickCode: pickCode,
+                    title: cleanedTitle,
+                    rawTitle: rawName
+                });
+                
+                // 绑定点击事件：创建 Page
+                statusIcon.onclick = async (e) => {
+                    e.stopPropagation();
+                    await createPageForIcon(statusIcon);
+                };
+                
+                // 悬停效果
+                statusIcon.onmouseenter = () => {
+                    if (statusIcon.dataset.status !== 'creating' && statusIcon.dataset.status !== 'created') {
+                        statusIcon.innerHTML = ' ➕';
+                        statusIcon.style.opacity = '1';
+                    }
+                };
+                statusIcon.onmouseleave = () => {
+                    if (statusIcon.dataset.status !== 'creating' && statusIcon.dataset.status !== 'created') {
+                        statusIcon.innerHTML = ' ❌';
+                        statusIcon.style.opacity = '0.5';
+                    }
+                };
             }
         }
         
         console.log(`[PickCode模式] 处理完成: 已查询 ${processedCount} 个文件, 跳过 ${noPickCodeCount} 个无pick_code的文件`);
+        console.log(`[PickCode模式] 未匹配: ${unmatchedItems.length} 个`);
+        
+        // 更新批量创建按钮状态
+        updateBatchCreateButton();
+    }
+
+    // 4.2 为单个图标创建 Page
+    async function createPageForIcon(statusIcon) {
+        const pickCode = statusIcon.dataset.pickCode;
+        const title = statusIcon.dataset.cleanedTitle;
+        
+        // 防止重复创建
+        if (statusIcon.dataset.status === 'creating' || statusIcon.dataset.status === 'created') {
+            return;
+        }
+        
+        // 更新状态：创建中
+        statusIcon.dataset.status = 'creating';
+        statusIcon.innerHTML = ' 🔄';
+        statusIcon.title = '创建中...';
+        statusIcon.style.opacity = '1';
+        
+        // 调用创建 API
+        const pageUrl = await createNotionPage(title, pickCode);
+        
+        if (pageUrl) {
+            // 创建成功
+            statusIcon.dataset.status = 'created';
+            statusIcon.innerHTML = ' 🎬';
+            statusIcon.title = `创建成功！点击打开 Notion (${title})`;
+            statusIcon.onclick = (e) => {
+                e.stopPropagation();
+                window.open(pageUrl, '_blank');
+            };
+            statusIcon.style.color = "#22c55e";  // 绿色表示创建成功
+            statusIcon.style.background = "rgba(255,255,255,0.8)";
+            statusIcon.style.padding = "2px 4px";
+            statusIcon.style.borderRadius = "3px";
+            
+            // 从未匹配列表中移除
+            unmatchedItems = unmatchedItems.filter(item => item.icon !== statusIcon);
+            updateBatchCreateButton();
+        } else {
+            // 创建失败
+            statusIcon.dataset.status = 'failed';
+            statusIcon.innerHTML = ' ⚠️';
+            statusIcon.title = '创建失败！点击重试';
+            statusIcon.style.opacity = '0.7';
+            // 允许重试
+            statusIcon.onclick = async (e) => {
+                e.stopPropagation();
+                statusIcon.dataset.status = '';  // 重置状态
+                await createPageForIcon(statusIcon);
+            };
+        }
+    }
+
+    // 4.3 批量创建未匹配的 Pages
+    async function batchCreatePages() {
+        if (unmatchedItems.length === 0) {
+            alert('没有未匹配的文件！');
+            return;
+        }
+        
+        const count = unmatchedItems.length;
+        const confirmed = confirm(`确定要为 ${count} 个未匹配文件创建 Notion Page 吗？\n\n文件列表：\n${unmatchedItems.slice(0, 5).map(item => `- ${item.title}`).join('\n')}${count > 5 ? `\n... 还有 ${count - 5} 个` : ''}`);
+        
+        if (!confirmed) return;
+        
+        console.log(`[批量创建] 开始创建 ${count} 个 Pages...`);
+        
+        // 更新按钮状态
+        const btn = document.getElementById('batch-create-btn');
+        const originalText = btn.innerText;
+        btn.disabled = true;
+        btn.style.cursor = 'not-allowed';
+        btn.style.opacity = '0.6';
+        
+        let successCount = 0;
+        let failCount = 0;
+        
+        // 复制一份列表，因为创建成功后会从原列表中移除
+        const itemsToCreate = [...unmatchedItems];
+        
+        for (let i = 0; i < itemsToCreate.length; i++) {
+            const item = itemsToCreate[i];
+            
+            // 更新按钮显示进度
+            btn.innerText = `创建中... ${i + 1}/${itemsToCreate.length}`;
+            
+            // 创建单个 Page
+            await createPageForIcon(item.icon);
+            
+            // 统计结果
+            if (item.icon.dataset.status === 'created') {
+                successCount++;
+            } else {
+                failCount++;
+            }
+            
+            // 每个创建之间延迟 500ms，避免 API 限流
+            if (i < itemsToCreate.length - 1) {
+                await sleep(500);
+            }
+        }
+        
+        // 恢复按钮状态
+        btn.disabled = false;
+        btn.style.cursor = 'pointer';
+        btn.style.opacity = '1';
+        btn.innerText = originalText;
+        
+        // 显示结果
+        alert(`批量创建完成！\n\n成功: ${successCount} 个\n失败: ${failCount} 个`);
+        console.log(`[批量创建] 完成: 成功 ${successCount}, 失败 ${failCount}`);
+    }
+
+    // 4.4 更新批量创建按钮状态
+    function updateBatchCreateButton() {
+        const btn = document.getElementById('batch-create-btn');
+        if (!btn) return;
+        
+        const count = unmatchedItems.length;
+        
+        if (count > 0) {
+            btn.innerText = `➕ 批量创建(${count})`;
+            btn.style.background = '#22c55e';
+            btn.style.cursor = 'pointer';
+            btn.style.display = 'block';
+            btn.disabled = false;
+        } else {
+            btn.style.display = 'none';
+        }
     }
 
     // 5. 注入主控制按钮（原有功能）
@@ -357,10 +588,28 @@
         document.body.appendChild(btn);
     }
 
-    // 初始化按钮（同时注入两个按钮）
+    // 5.2 注入批量创建按钮（新增功能）
+    function injectBatchCreateButton() {
+        const btn = document.createElement('button');
+        btn.id = 'batch-create-btn';
+        btn.innerText = '➕ 批量创建(0)';
+        btn.style.cssText = `
+            position: fixed; bottom: 130px; right: 20px; z-index: 10000;
+            padding: 10px 20px; background: #888; color: white;
+            border: none; border-radius: 50px; cursor: not-allowed;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-weight: bold;
+            display: none;
+        `;
+        btn.onclick = batchCreatePages;
+        btn.disabled = true;
+        document.body.appendChild(btn);
+    }
+
+    // 初始化按钮（注入所有按钮）
     setTimeout(() => {
         injectControlPanel();        // 原有按钮：基于 title 匹配
         injectPickCodeButton();      // 新增按钮：基于 pick_code 匹配
+        injectBatchCreateButton();   // 新增按钮：批量创建
     }, 2000);
 
 })();
