@@ -30,10 +30,11 @@
 
     // ================= 配置区 =================
     const NOTION_CONFIG = {
-        token: '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',
+        token: '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',
         databaseId: '546b58ef109d4b4393824c33993374a8',
         propertyName: '番号',          // 对应 Notion 中的属性名（用于 title 查询）
-        playLinkProperty: 'PlayLink'   // 对应 Notion 中的 PlayLink 字段（用于 pick_code 查询）
+        playLinkProperty: 'PlayLink',   // 对应 Notion 中的 PlayLink 字段（用于 pick_code 查询）
+        folderProperty: '文件夹'        // 对应 Notion 中的文件夹字段（Multi-select 类型）
     };
 
     // PlayLink URL 格式配置（用于构建完整 URL 进行精确匹配）
@@ -217,7 +218,147 @@
         return null;
     }
 
-    // 3.2 创建 Notion Page（新增）
+    // 3.2 通过 pick_code 查询 Notion Page（返回完整对象，用于更新操作）
+    async function queryNotionPageByPickCode(pickCode) {
+        console.log(`[PageQuery] 开始查询完整 Page 对象: ${pickCode}`);
+        
+        // 依次尝试每种 URL 格式
+        for (let i = 0; i < PLAYLINK_URL_FORMATS.length; i++) {
+            const urlTemplate = PLAYLINK_URL_FORMATS[i];
+            const fullUrl = urlTemplate.replace('{pickcode}', pickCode);
+            
+            // 使用精确匹配查询
+            const result = await new Promise((resolve) => {
+                GM_xmlhttpRequest({
+                    method: "POST",
+                    url: `https://api.notion.com/v1/databases/${NOTION_CONFIG.databaseId}/query`,
+                    headers: {
+                        "Authorization": `Bearer ${NOTION_CONFIG.token}`,
+                        "Content-Type": "application/json",
+                        "Notion-Version": "2022-06-28"
+                    },
+                    data: JSON.stringify({
+                        filter: {
+                            property: NOTION_CONFIG.playLinkProperty,
+                            url: { equals: fullUrl }
+                        }
+                    }),
+                    onload: (res) => {
+                        if (res.status === 200) {
+                            const data = JSON.parse(res.responseText);
+                            
+                            if (data.results && data.results.length > 0) {
+                                const page = data.results[0];
+                                console.log(`✅ [PageQuery] 找到 Page ID: ${page.id}`);
+                                resolve({
+                                    id: page.id,
+                                    url: page.url,
+                                    properties: page.properties
+                                });
+                            } else {
+                                resolve(null);
+                            }
+                        } else {
+                            console.error(`[PageQuery] API错误: ${res.status}`);
+                            resolve(null);
+                        }
+                    },
+                    onerror: (err) => {
+                        console.error('[PageQuery] 请求失败:', err);
+                        resolve(null);
+                    }
+                });
+            });
+            
+            if (result) {
+                return result;
+            }
+            
+            if (i < PLAYLINK_URL_FORMATS.length - 1) {
+                await sleep(100);
+            }
+        }
+        
+        console.log(`❌ [PageQuery] 未找到匹配的 Page: ${pickCode}`);
+        return null;
+    }
+
+    // 3.3 更新 Page 的文件夹属性（Multi-select 追加模式）
+    async function updatePageFolderProperty(pageId, pageProperties, folderNames) {
+        console.log(`[文件夹更新] Page ID: ${pageId}, 添加文件夹: ${folderNames.join(', ')}`);
+        
+        // 1. 获取现有的 multi_select 值
+        const existingFolders = pageProperties[NOTION_CONFIG.folderProperty]?.multi_select || [];
+        const existingNames = existingFolders.map(f => f.name);
+        
+        console.log(`[文件夹更新] 现有文件夹: ${existingNames.join(', ') || '(无)'}`);
+        
+        // 2. 检查哪些文件夹已存在，哪些需要新增
+        const toAdd = [];
+        const alreadyExists = [];
+        
+        for (let folderName of folderNames) {
+            if (existingNames.includes(folderName)) {
+                alreadyExists.push(folderName);
+            } else {
+                toAdd.push(folderName);
+            }
+        }
+        
+        // 3. 如果全部已存在，无需更新
+        if (toAdd.length === 0) {
+            console.log(`⏭️ [文件夹更新] 所有文件夹均已存在，跳过更新`);
+            return { success: true, status: 'existed', added: [], existed: alreadyExists };
+        }
+        
+        // 4. 构建新的 multi_select 数组（保留旧值 + 新增）
+        const updatedFolders = [
+            ...existingFolders.map(f => ({ name: f.name })),
+            ...toAdd.map(name => ({ name: name }))
+        ];
+        
+        console.log(`[文件夹更新] 将更新为: ${updatedFolders.map(f => f.name).join(', ')}`);
+        
+        // 5. 调用 PATCH API 更新
+        return new Promise((resolve) => {
+            GM_xmlhttpRequest({
+                method: "PATCH",
+                url: `https://api.notion.com/v1/pages/${pageId}`,
+                headers: {
+                    "Authorization": `Bearer ${NOTION_CONFIG.token}`,
+                    "Content-Type": "application/json",
+                    "Notion-Version": "2022-06-28"
+                },
+                data: JSON.stringify({
+                    properties: {
+                        [NOTION_CONFIG.folderProperty]: {
+                            multi_select: updatedFolders
+                        }
+                    }
+                }),
+                onload: (res) => {
+                    if (res.status === 200) {
+                        console.log(`✅ [文件夹更新] 更新成功，新增: ${toAdd.join(', ')}`);
+                        resolve({ 
+                            success: true, 
+                            status: 'added', 
+                            added: toAdd, 
+                            existed: alreadyExists 
+                        });
+                    } else {
+                        console.error(`❌ [文件夹更新] 更新失败: ${res.status}`, res.responseText);
+                        resolve({ success: false, status: 'failed', error: res.responseText });
+                    }
+                },
+                onerror: (err) => {
+                    console.error('[文件夹更新] 请求失败:', err);
+                    resolve({ success: false, status: 'failed', error: err });
+                }
+            });
+        });
+    }
+
+    // 3.4 创建 Notion Page（原有功能）
     async function createNotionPage(title, pickCode) {
         console.log(`[Notion创建] 开始创建 Page: ${title}, PickCode: ${pickCode}`);
         
@@ -607,6 +748,154 @@
         }
     }
 
+    // 4.5 批量更新文件夹属性（新增功能）
+    async function batchUpdateFolders() {
+        // 1. 获取用户输入的文件夹名
+        const folderInput = document.getElementById('folder-name-input');
+        const folderNamesRaw = folderInput.value.trim();
+        
+        // 2. 输入验证
+        if (!folderNamesRaw) {
+            alert('❌ 请输入文件夹名称！');
+            return;
+        }
+        
+        // 3. 解析多个文件夹（用逗号分隔）
+        const folderNames = folderNamesRaw.split(',')
+            .map(name => name.trim())
+            .filter(name => name.length > 0);
+        
+        if (folderNames.length === 0) {
+            alert('❌ 请输入有效的文件夹名称！');
+            return;
+        }
+        
+        console.log(`[批量更新文件夹] 将设置文件夹: ${folderNames.join(', ')}`);
+        
+        // 4. 获取所有文件 li 元素
+        const items = document.querySelectorAll('.list-thumb ul li[rel="item"]');
+        
+        // 5. 过滤：文件夹、后缀、无 pick_code
+        const validItems = [];
+        for (let li of items) {
+            // 检查是否是文件（有 sha1）
+            const sha1 = li.getAttribute('sha1');
+            if (!sha1 || sha1.trim() === '') continue;
+            
+            // 检查是否有 pick_code
+            const pickCode = li.getAttribute('pick_code');
+            if (!pickCode || pickCode.trim() === '') continue;
+            
+            // 检查文件后缀
+            const rawName = li.getAttribute('title');
+            if (rawName) {
+                const lastDotIndex = rawName.lastIndexOf('.');
+                if (lastDotIndex !== -1) {
+                    const fileExt = rawName.substring(lastDotIndex).toLowerCase();
+                    if (EXCLUDED_EXTENSIONS.includes(fileExt)) continue;
+                }
+            }
+            
+            validItems.push(li);
+        }
+        
+        // 6. 检查是否有有效文件
+        if (validItems.length === 0) {
+            alert('❌ 当前页面没有可处理的文件！\n\n可能原因：\n- 只有文件夹\n- 都是图片/字幕等排除类型\n- 没有 pick_code 属性');
+            return;
+        }
+        
+        // 7. 确认对话框
+        const filePreview = validItems.slice(0, 5).map(li => {
+            const title = li.getAttribute('title');
+            return `  • ${title}`;
+        }).join('\n');
+        
+        const confirmed = confirm(
+            `确定要为 ${validItems.length} 个文件设置文件夹吗？\n\n` +
+            `文件夹: ${folderNames.join(', ')}\n\n` +
+            `文件预览（前5个）：\n${filePreview}` +
+            (validItems.length > 5 ? `\n  ... 还有 ${validItems.length - 5} 个` : '') +
+            `\n\n⚠️ 注意：这将更新所有文件对应的 Notion Page。`
+        );
+        
+        if (!confirmed) return;
+        
+        // 8. 更新按钮状态
+        const btn = document.getElementById('folder-update-btn');
+        const originalText = btn.innerText;
+        btn.disabled = true;
+        btn.style.cursor = 'not-allowed';
+        btn.style.opacity = '0.6';
+        
+        // 9. 统计信息
+        let stats = {
+            total: validItems.length,
+            success: 0,
+            totalAdded: 0,
+            totalExisted: 0,
+            notFound: 0,
+            failed: 0
+        };
+        
+        console.log(`[批量更新文件夹] 开始处理 ${validItems.length} 个文件...`);
+        
+        // 10. 遍历处理
+        for (let i = 0; i < validItems.length; i++) {
+            const li = validItems[i];
+            const pickCode = li.getAttribute('pick_code');
+            const rawName = li.getAttribute('title');
+            
+            // 更新按钮显示进度
+            btn.innerText = `📁 正在更新... ${i + 1}/${validItems.length}`;
+            
+            console.log(`[批量更新文件夹] 处理 ${i + 1}/${validItems.length}: ${rawName}`);
+            
+            // 查询 Page
+            const page = await queryNotionPageByPickCode(pickCode);
+            if (!page) {
+                console.warn(`⚠️ [批量更新文件夹] 未找到 Page (PickCode: ${pickCode})`);
+                stats.notFound++;
+                await sleep(500);
+                continue;
+            }
+            
+            // 更新属性
+            const result = await updatePageFolderProperty(page.id, page.properties, folderNames);
+            if (result.success) {
+                stats.success++;
+                stats.totalAdded += result.added ? result.added.length : 0;
+                stats.totalExisted += result.existed ? result.existed.length : 0;
+            } else {
+                stats.failed++;
+            }
+            
+            // API 限流延迟
+            if (i < validItems.length - 1) {
+                await sleep(500);
+            }
+        }
+        
+        // 11. 恢复按钮状态
+        btn.disabled = false;
+        btn.style.cursor = 'pointer';
+        btn.style.opacity = '1';
+        btn.innerText = originalText;
+        
+        // 12. 显示结果
+        const resultMessage = 
+            `🎉 批量更新完成！\n\n` +
+            `文件夹: "${folderNames.join(', ')}"\n\n` +
+            `✅ 成功: ${stats.success} 个\n` +
+            `   ├─ 📝 新增文件夹值: ${stats.totalAdded} 次\n` +
+            `   └─ ⏭️ 已有该值跳过: ${stats.totalExisted} 次\n` +
+            `❌ 未找到 Page: ${stats.notFound} 个\n` +
+            `⚠️ 更新失败: ${stats.failed} 个\n`;
+        
+        alert(resultMessage);
+        console.log(`[批量更新文件夹] 完成统计:`, stats);
+    }
+
     // 5. 注入主控制按钮（原有功能）
     function injectControlPanel() {
         const btn = document.createElement('button');
@@ -652,11 +941,82 @@
         document.body.appendChild(btn);
     }
 
+    // 5.4 注入文件夹更新 UI（新增功能）
+    function injectFolderUpdateUI() {
+        // 容器
+        const container = document.createElement('div');
+        container.id = 'folder-update-container';
+        container.style.cssText = `
+            position: fixed; top: 20px; right: 20px; z-index: 10000;
+            display: flex; align-items: center; gap: 10px;
+            background: white; padding: 10px 15px;
+            border-radius: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        `;
+        
+        // 标签
+        const label = document.createElement('span');
+        label.innerText = '📂 文件夹:';
+        label.style.cssText = 'font-weight: bold; font-size: 14px; color: #333;';
+        
+        // 输入框
+        const input = document.createElement('input');
+        input.id = 'folder-name-input';
+        input.type = 'text';
+        input.placeholder = '输入文件夹名（多个用逗号分隔）';
+        input.style.cssText = `
+            border: 1px solid #ddd; border-radius: 15px;
+            padding: 6px 12px; width: 220px; font-size: 13px;
+            outline: none; transition: border-color 0.2s;
+        `;
+        
+        // 输入框焦点效果
+        input.onfocus = () => {
+            input.style.borderColor = '#22c55e';
+        };
+        input.onblur = () => {
+            input.style.borderColor = '#ddd';
+        };
+        
+        // 按钮
+        const button = document.createElement('button');
+        button.id = 'folder-update-btn';
+        button.innerHTML = '📁 批量设置';
+        button.style.cssText = `
+            background: #22c55e; color: white; border: none;
+            border-radius: 15px; padding: 7px 16px;
+            cursor: pointer; font-weight: bold; font-size: 13px;
+            transition: background 0.2s;
+        `;
+        
+        // 按钮悬停效果
+        button.onmouseenter = () => {
+            if (!button.disabled) {
+                button.style.background = '#16a34a';
+            }
+        };
+        button.onmouseleave = () => {
+            if (!button.disabled) {
+                button.style.background = '#22c55e';
+            }
+        };
+        
+        button.onclick = batchUpdateFolders;
+        
+        // 组装
+        container.appendChild(label);
+        container.appendChild(input);
+        container.appendChild(button);
+        document.body.appendChild(container);
+        
+        console.log('[UI注入] 文件夹更新界面已注入');
+    }
+
     // 初始化按钮（注入所有按钮）
     setTimeout(() => {
         injectControlPanel();        // 原有按钮：基于 title 匹配
         injectPickCodeButton();      // 新增按钮：基于 pick_code 匹配
         injectBatchCreateButton();   // 新增按钮：批量创建
+        injectFolderUpdateUI();      // 新增UI：文件夹批量更新
     }, 2000);
 
 })();
